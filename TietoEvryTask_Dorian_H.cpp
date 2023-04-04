@@ -38,6 +38,12 @@ std::string result_file_name;
 int num_threads = 4;
 std::vector<std::string> processed_files;
 
+// Cleaner function for .log + .txt
+void clear(std::string x)
+{
+    std::ofstream file(x);
+}
+
 // Helper function to process a single file and find matches
 void process_file(const std::string& file_path) {
     std::ifstream file(file_path);
@@ -59,11 +65,16 @@ void process_file(const std::string& file_path) {
         }
     }
     file.close();
+    files_searched++;
     if (!matches.empty()) {
         std::lock_guard<std::mutex> lock(result_mutex);
-        std::sort(matches.begin(), matches.end(), [](const Match& a, const Match& b) {
-            return a.file_path < b.file_path;
-            });
+std::sort(matches.begin(), matches.end(), [](const Match& a, const Match& b) {
+    if (a.file_path != b.file_path) {
+        return a.file_path < b.file_path;
+    } else {
+        return a.line_number < b.line_number;
+    }
+});
         for (const auto& match : matches) {
             std::ofstream result_file(result_file_name, std::ios_base::app);
             if (result_file) {
@@ -87,8 +98,8 @@ void process_files() {
         if (processed_files.empty()) {
             lock.unlock();
             break;
-        }
-        else {
+        } else {
+            std::sort(processed_files.begin(), processed_files.end());
             file_path = processed_files.back();
             processed_files.pop_back();
             lock.unlock();
@@ -96,11 +107,9 @@ void process_files() {
             std::lock_guard<std::mutex> lock(log_mutex);
             std::ofstream log_file(log_file_name, std::ios_base::app);
             if (log_file) {
-                log_file << std::this_thread::get_id() << ":" <<
-                    file_path << ",";
+                log_file << std::this_thread::get_id() << ":" << file_path << "," << std::endl;
                 log_file.close();
-            }
-            else {
+            } else {
                 std::cerr << "Error opening file: " << log_file_name << std::endl;
             }
         }
@@ -109,6 +118,7 @@ void process_files() {
 
 // Main function to parse command line arguments and start the search
 int main(int argc, char** argv) {
+auto start = std::chrono::steady_clock::now();
     // Parse command line arguments
     if (argc < 2) {
         print_usage(argv[0]);
@@ -139,9 +149,11 @@ int main(int argc, char** argv) {
     // Set default values for log and result file names
     if (log_file_name.empty()) {
         log_file_name = std::string(argv[0]) + ".log";
+        clear(log_file_name);
     }
     if (result_file_name.empty()) {
         result_file_name = std::string(argv[0]) + ".txt";
+        clear(result_file_name);
     }
 
     // Get a list of all files in the start directory and its subdirectories
@@ -175,8 +187,8 @@ int main(int argc, char** argv) {
     std::cout << "Result file: " << std::filesystem::absolute(result_file_name) << std::endl;
     std::cout << "Log file: " << std::filesystem::absolute(log_file_name) << std::endl;
     std::cout << "Used threads: " << num_threads << std::endl;
-    std::chrono::duration<double> elapsed_time = std::chrono::system_clock::now() - std::chrono::system_clock::from_time_t(0);
-    std::cout << "Elapsed time: " << elapsed_time.count() << " seconds" << std::endl;
-
+    auto end = std::chrono::steady_clock::now();
+    std::cout << "Elapsed time: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() 
+    << " [ms]" << std::endl;
     return 0;
 }
