@@ -6,4 +6,4 @@ Parameter	Description	default value<br>
 -r or --result_file	name of the file where result is given	<program name>.txt<br>
 -t or --threads	number of threads in the pool	4<br><br>
 
-![SS from project](https://i.gyazo.com/5b0f3b939a362d1e11fd8733480dbe08.png)
+![SS from project](https://i.gyazo.com/b50a06ecea48654d9045b1f1644dc735.png)
