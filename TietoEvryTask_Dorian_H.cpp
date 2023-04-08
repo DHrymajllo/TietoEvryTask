@@ -31,6 +31,7 @@ std::mutex result_mutex;
 std::atomic<int> files_searched(0);
 std::atomic<int> files_with_pattern(0);
 std::atomic<int> patterns_number(0);
+std::atomic<int> thread_number(0);
 std::string search_pattern;
 std::string start_directory = ".";
 std::string log_file_name;
@@ -39,9 +40,10 @@ int num_threads = 4;
 std::vector<std::string> processed_files;
 
 // Cleaner function for .log + .txt
-void clear(std::string x)
-{
-    std::ofstream file(x);
+void clear(std::string filename) {
+    if (std::remove(filename.c_str()) != 0) {
+        std::cerr << "Error deleting file: " << filename << std::endl;
+    }
 }
 
 // Helper function to process a single file and find matches
@@ -52,6 +54,8 @@ void process_file(const std::string& file_path) {
         std::cerr << "Error opening file: " << file_path << std::endl;
         return;
     }
+    // Extract the name of the file from the file path
+    std::string filename = file_path.substr(file_path.find_last_of("/") + 1);
     std::string line;
     int line_number = 0;
     std::vector<Match> matches;
@@ -60,7 +64,7 @@ void process_file(const std::string& file_path) {
         std::smatch match;
         if (std::regex_search(line, match, std::regex(search_pattern))) {
             std::lock_guard<std::mutex> lock(result_mutex);
-            matches.push_back({ file_path, line_number, line });
+            matches.push_back({ filename, line_number, line });
             patterns_number++;
         }
     }
@@ -68,20 +72,19 @@ void process_file(const std::string& file_path) {
     files_searched++;
     if (!matches.empty()) {
         std::lock_guard<std::mutex> lock(result_mutex);
-std::sort(matches.begin(), matches.end(), [](const Match& a, const Match& b) {
-    if (a.file_path != b.file_path) {
-        return a.file_path < b.file_path;
-    } else {
-        return a.line_number < b.line_number;
-    }
-});
+        std::sort(matches.begin(), matches.end(), [](const Match& a, const Match& b) {
+            if (a.file_path != b.file_path) {
+                return a.file_path < b.file_path;
+            } else {
+                return a.line_number < b.line_number;
+            }
+        });
         for (const auto& match : matches) {
             std::ofstream result_file(result_file_name, std::ios_base::app);
             if (result_file) {
-                result_file << match.file_path << ":" << match.line_number << ": " << match.line_content << "\n";
+                result_file << match.file_path << ": " << match.line_content << "\n";
                 result_file.close();
-            }
-            else {
+            } else {
                 std::lock_guard<std::mutex> lock(log_mutex);
                 std::cerr << "Error opening file: " << result_file_name << std::endl;
             }
@@ -92,27 +95,42 @@ std::sort(matches.begin(), matches.end(), [](const Match& a, const Match& b) {
 
 // Helper function for each thread to get a file to process from the queue
 void process_files() {
+    int local_thread_number;
+    {
+        std::lock_guard<std::mutex> lock(thread_mutex);
+        local_thread_number = ++thread_number;
+    }
     std::string file_path;
+    std::map<int, std::vector<std::string>> thread_files; // map to store thread number and vector of file names
     while (true) {
         std::unique_lock<std::mutex> lock(thread_mutex);
         if (processed_files.empty()) {
             lock.unlock();
             break;
         } else {
-            std::sort(processed_files.begin(), processed_files.end());
             file_path = processed_files.back();
             processed_files.pop_back();
             lock.unlock();
+            std::string file_name = file_path.substr(file_path.find_last_of("/\\") + 1);
             process_file(file_path);
-            std::lock_guard<std::mutex> lock(log_mutex);
-            std::ofstream log_file(log_file_name, std::ios_base::app);
-            if (log_file) {
-                log_file << std::this_thread::get_id() << ":" << file_path << "," << std::endl;
-                log_file.close();
-            } else {
-                std::cerr << "Error opening file: " << log_file_name << std::endl;
-            }
+            // add file name to vector of files for this thread
+            thread_files[local_thread_number].push_back(file_name);
         }
+    }
+    // sort file names processed by this thread
+    std::sort(thread_files[local_thread_number].begin(), thread_files[local_thread_number].end());
+    // write all files processed by this thread to log file in one output
+    std::lock_guard<std::mutex> lock(log_mutex);
+    std::ofstream log_file(log_file_name, std::ios_base::app);
+    if (log_file) {
+        log_file << "Thread " << local_thread_number << ": ";
+        for (const auto& file_name : thread_files[local_thread_number]) {
+            log_file << file_name << ",";
+        }
+        log_file << std::endl;
+        log_file.close();
+    } else {
+        std::cerr << "Error opening file: " << log_file_name << std::endl;
     }
 }
 
